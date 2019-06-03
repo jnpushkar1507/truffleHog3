@@ -23,23 +23,33 @@ def run(**kwargs):
     core.config.update(**args.__dict__)
     issues = []
 
-    with TemporaryDirectory() as tmp:
-        if args.no_history:
-            source = args.source.split("://")[-1]
-            if os.path.isdir(source):
-                dir_util.copy_tree(source, tmp, preserve_symlinks=True)
-            else:
-                shutil.copy2(source, tmp)
+    workdir = args.workdir
+    if args.workdir is None:
+        workdir = TemporaryDirectory()
+    else:
+        os.makedirs(workdir, exist_ok=True)
+
+    if args.no_history:
+        source = args.source.split("://")[-1]
+        if os.path.isdir(source):
+            dir_util.copy_tree(source, workdir, preserve_symlinks=True)
         else:
-            try:
-                git.Repo.clone_from(args.source, tmp)
-            except Exception:  # pragma: no cover
-                error = "Failed to clone repository: {}".format(args.source)
-                raise RuntimeError(error)
+            shutil.copy2(source, workdir)
+    else:
+        try:
+            if os.path.exists(os.path.join(workdir, '.git')):
+                repo = git.Repo.init(workdir)
+                repo.git.reset('--hard')
+                repo.remotes.origin.pull()
+            else:
+                git.Repo.clone_from(args.source, workdir)
+        except git.exc.GitError:  # pragma: no cover
+            error = "Failed to clone repository: {}".format(args.source)
+            raise RuntimeError(error)
 
-            issues = core.search_history(tmp)
+        issues = core.search_history(workdir)
 
-        issues += core.search_current(tmp)
+    issues += core.search_current(workdir)
 
     core.log(issues, output=args.output, json_output=args.json_output)
     return bool(issues)
@@ -97,6 +107,10 @@ def get_cmdline_args():
     parser.add_argument(
         "-s", "--since-commit", help="scan starting from a given commit hash",
         dest="since_commit"
+    )
+    parser.add_argument(
+        "-w", "--workdir", help="directory to cache files for future runs",
+        dest="workdir"
     )
     parser.add_argument(
         "--json", help="output in JSON",
